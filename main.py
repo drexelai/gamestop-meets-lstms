@@ -12,8 +12,14 @@ import os
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM, Dropout, RepeatVector, TimeDistributed
 from sklearn.preprocessing import StandardScaler
+import datetime
+
+import streamlit as st
 
 def create_dataset(X, y, time_steps=1):
+    """
+    Preprocess data
+    """
     Xs, ys = [], []
     for i in range(len(X) - time_steps):
         v = X.iloc[i:(i + time_steps)].values
@@ -22,7 +28,7 @@ def create_dataset(X, y, time_steps=1):
     return np.array(Xs), np.array(ys)
 
 def plot_loss(history):
-	# Plot training & validation loss values
+	"""Plot training & validation loss values"""
 	plt.plot(history.history['loss'])
 	plt.plot(history.history['val_loss'])
 	plt.title('Model loss')
@@ -32,6 +38,7 @@ def plot_loss(history):
 	plt.show()
 
 def build_model(timesteps, num_features):
+    """Build LSTM model for prediction"""
     model = Sequential([
         LSTM(128, activation='relu', input_shape=(timesteps, num_features)),
         RepeatVector(timesteps),
@@ -106,6 +113,43 @@ def detect_anomaly(test, time_steps):
     fig.update_layout(showlegend=True)
     fig.show()
 
+def get_and_plot_data(stock="AAPL", start="2010-03-01", end="2021-01-01"):
+    """
+    Get and plot data using yfinance library
+    """
+    stock_obj = yf.Ticker(stock)
+    stock_historical = stock_obj.history(start=start, end=end, interval="1d")
+
+    plt.plot(stock_historical)
+    plt.show()
+
+    # start_date = st.slider('Enter start date:', value = datetime.datetime(2020,1,1,9,30))
+    # end_date = st.slider('Enter end date:', value = datetime.datetime(2020,1,1,9,30))
+    return stock_historical
+
+def buy_and_hold(stock="AAPL", amt=1, start=datetime.date(2010, 2, 7), end=datetime.date(2021, 2, 7), rounding=False, interval="1d"):
+	'''
+	
+	'''
+	stock_obj = yf.Ticker(stock)
+	start_end = datetime.date(start.year, start.month, start.day + 10)
+	end_end = datetime.date(end.year, end.month, end.day + 10)
+	stock_history_start = stock_obj.history(start=start, end=start_end, interval=interval, rounding=rounding)
+	stock_history_end = stock_obj.history(start=end, end=end_end, interval=interval, rounding=rounding)
+	close_delta = stock_history_end.iloc[len(stock_history_end) - 1, 3] - stock_history_start.iloc[0, 3]
+	return amt * close_delta
+
+
+def calc_max_profit(price_list):
+	'''
+	For LSTM predictions
+	'''
+	max_profit = 0
+	for i in range(len(price_list) - 1):
+		if price_list[i + 1] > price_list[i]:
+			max_profit += price_list[i + 1] - price_list[i]
+	return max_profit
+
 if __name__ == "__main__":
 
     # read data
@@ -143,7 +187,7 @@ if __name__ == "__main__":
 
     history = model.fit(
         X_train, y_train,
-        epochs=100,
+        epochs=2,
         batch_size=32,
         validation_split=0.1,
         callbacks = [es],

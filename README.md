@@ -1,7 +1,7 @@
 # Stock Trading with Deep Learning: When GameStop meets LSTMs
 
 
-- [] S&P 500 Buy & Hold
+- [x] S&P 500 Buy & Hold - Yigit
 - [x] LSTM Prediction - Yigit
 - [x] Consolidation Break out - Yigit
 
