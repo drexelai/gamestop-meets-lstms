@@ -73,7 +73,7 @@ def save_model(model, model_file_name):
     # serialize weights to HDF5
     model.save_weights(model_file_name + ".h5")
 
-def detect_anomaly(test, time_steps):
+def detect_anomaly(test, time_steps=1):
     THRESHOLD = 0.55
 
     test_score_df = pd.DataFrame(test[time_steps:])
@@ -150,33 +150,21 @@ def calc_max_profit(price_list):
 			max_profit += price_list[i + 1] - price_list[i]
 	return max_profit
 
-if __name__ == "__main__":
+def plot_mae_loss(model, X_train):
+    X_train_pred = model.predict(X_train)
 
-    # read data
-    df = pd.read_csv(os.path.join('data', 'S&P_500_Index_Data.csv'), parse_dates=['date'])
+    train_mae_loss = np.mean(np.abs(X_train_pred - X_train), axis=1)
+    print("[INFO] mae loss:", train_mae_loss)
+    
+    sns.distplot(train_mae_loss, bins=50, kde=True)
+    plt.show()
 
-    # adapted from https://github.com/Tekraj15/AnomalyDetectionTimeSeriesData/blob/master/Anomaly_Detection_Time_Series_Keras.ipynb
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.date, y=df.close,
-                        mode='lines',
-                        name='close'))
-    fig.update_layout(showlegend=True)
-    fig.show()
+def evaluate_model(model, X_test, y_test):
+    print("[INFO] Model evaluation results:")
+    print(model.evaluate(X_test, y_test))
 
-    # preprocess
-    train_size = int(len(df) * 0.8)
-    test_size = len(df) - train_size
-    train, test = df.iloc[0:train_size], df.iloc[train_size:len(df)]
-    print(train.shape, test.shape)
-
-    # Go back 30 days for now
-    time_steps = 30
-
-    X_train, y_train = create_dataset(train[['close']], train.close, time_steps)
-    X_test, y_test = create_dataset(test[['close']], test.close, time_steps)
-
-    print(X_train.shape)
-
+def train_model(X_train, y_train, epochs=1, time_steps=1):
+    """Train model and plot loss and accuracy"""
     timesteps = X_train.shape[1]
     num_features = X_train.shape[2]
 
@@ -187,7 +175,7 @@ if __name__ == "__main__":
 
     history = model.fit(
         X_train, y_train,
-        epochs=2,
+        epochs=epochs,
         batch_size=32,
         validation_split=0.1,
         callbacks = [es],
@@ -195,20 +183,44 @@ if __name__ == "__main__":
     )
 
     plot_loss(history)
+    return model
 
-    X_train_pred = model.predict(X_train)
+def load_data(filename='S&P_500_Index_Data.csv', time_steps=1):
+    # read data
+    df = pd.read_csv(os.path.join('data', filename), parse_dates=['date'])
 
-    train_mae_loss = pd.DataFrame(np.mean(np.abs(X_train_pred - X_train), axis=1), columns=['Error'])
-    print("train_mae_loss", train_mae_loss)
-    print(model.evaluate(X_test, y_test))
+    # adapted from https://github.com/Tekraj15/AnomalyDetectionTimeSeriesData/blob/master/Anomaly_Detection_Time_Series_Keras.ipynb
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.date, y=df.close,
+                        mode='lines',
+                        name='close'))
+    fig.update_layout(showlegend=True)
+    fig.show()
 
-    sns.distplot(train_mae_loss, bins=50, kde=True)
+    # Preprocess
+    train_size = int(len(df) * 0.8)
+    test_size = len(df) - train_size
+    train, test = df.iloc[0:train_size], df.iloc[train_size:len(df)]
+    print(train.shape, test.shape)
 
-    X_test_pred = model.predict(X_test)
+    # Go back days for now
+    time_steps = 1
 
-    test_mae_loss = np.mean(np.abs(X_test_pred - X_test), axis=1)
-    print("test_mae_loss", test_mae_loss)
-    sns.distplot(test_mae_loss, bins=50, kde=True)
-    plt.show()
+    X_train, y_train = create_dataset(train[['close']], train.close, time_steps)
+    X_test, y_test = create_dataset(test[['close']], test.close, time_steps)
+    return X_train, y_train, X_test, y_test, train, test
 
-    detect_anomaly(test, time_steps)
+if __name__ == "__main__":
+
+    # Load data
+    X_train, y_train, X_test, y_test, train, test = load_data(filename = 'S&P_500_Index_Data.csv')
+
+    # Train model
+    model = train_model(X_train, y_train)
+
+    # Plot mean squared error
+    plot_mae_loss(model, X_train)
+    plot_mae_loss(model, X_test)
+
+    # Detect anomaly
+    detect_anomaly(test)
