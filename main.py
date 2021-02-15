@@ -78,7 +78,15 @@ def save_model(model, model_file_name):
     model.save_weights(model_file_name + ".h5")
 
 
-def detect_anomaly(model, train, test, X_train, X_test, time_steps=1, close_column_name="Adj Close"):
+def detect_anomaly(stock_price, time_steps=1, close_column_name="Adj Close"):
+    X_train, y_train, X_test, y_test, train, test = plot_and_prepare_data(stock_price)
+
+    # Train model
+    model = train_model(X_train, y_train)
+
+    # Evaluate model
+    evaluate_model(model, X_test, y_test)
+
     THRESHOLD = 0.55
 
     test_mae_loss = calculate_mae_loss(model, X_test)
@@ -123,8 +131,33 @@ def detect_anomaly(model, train, test, X_train, X_test, time_steps=1, close_colu
                         name='Anomaly'))
     fig.update_layout(showlegend=True)
     fig.show()
-    return scaler
+    breakouts = scaler.inverse_transform(anomalies[close_column_name])
+    max_profit, profitable_trade_count, unprofitable_trade_count, success_rate = calc_max_profit_based_on_breakouts(breakouts, close_column_name)
+    return max_profit, profitable_trade_count, unprofitable_trade_count, success_rate
 
+def calc_max_profit_based_on_breakouts(breakouts, close_column_name="Adj Close", predictions_column_name="Predictions"):
+    '''Calculate max profit given LSTM breakouts. 
+    breakouts is a pandas dataframe and has
+    ['Adj Close', 'Anomalies'].'''
+    max_profit = 0
+    profitable_trade_count = unprofitable_trade_count = 0
+    for i in range(len(breakouts) - 1):
+        if breakouts[close_column_name].iloc[i + 1] > breakouts[close_column_name].iloc[i] and breakouts[predictions_column_name].iloc[i + 1] > breakouts[predictions_column_name].iloc[i]:
+            # LSTM prediction was succesful. Execute trade and collect profits.
+            max_profit += valid[close_column_name].iloc[i + 1] - valid[close_column_name].iloc[i]
+            profitable_trade_count +=1
+        elif breakouts[close_column_name].iloc[i + 1] < breakouts[close_column_name].iloc[i] and breakouts[predictions_column_name].iloc[i + 1] > breakouts[predictions_column_name].iloc[i]:
+            # LSTM prediction was NOT successful. Execute the trade to stop loss.
+            # We have valid[close_column_name].iloc[i + 1] < valid[close_column_name].iloc[i], so here we are adding a negative value to max_profit.
+            # This means we are losing money. 
+            max_profit += anomalies[close_column_name].iloc[i + 1] - breakouts[close_column_name].iloc[i]
+            unprofitable_trade_count +=1
+        elif breakouts[predictions_column_name].iloc[i + 1] < breakouts[predictions_column_name].iloc[i]:
+            # LSTM predicts that stock price will drop. We don't enter a trade.
+            pass
+    success_rate = profitable_trade_count / (profitable_trade_count + unprofitable_trade_count) * 100
+    print("[INFO] Profitable trade count: {} Unprofitable trade count: {} Success Rate: {}%".format(profitable_trade_count, unprofitable_trade_count, success_rate))
+    return max_profit, profitable_trade_count, unprofitable_trade_count, success_rate
 
 def fetch_data(ticker, start_date, end_date):
     """
@@ -150,17 +183,6 @@ def buy_and_hold(stock_price, start_date, end_date):
 def to_datetime(date_str):
     temp = datetime.strptime(date_str, '%Y-%M-%d')
     return date(temp.year, temp.month, temp.day)
-
-
-def calc_max_profit(price_list):
-	'''
-	For LSTM predictions
-	'''
-	max_profit = 0
-	for i in range(len(price_list) - 1):
-		if price_list[i + 1] > price_list[i]:
-			max_profit += price_list[i + 1] - price_list[i]
-	return max_profit
 
 
 def calculate_mae_loss(model, X):
@@ -246,9 +268,9 @@ def plot_and_prepare_data(df, close_column_name="Adj Close"):
     print(X_train.shape)
     return X_train, y_train, X_test, y_test, train, test
 
-
-def trade_pure_lstm_predictions(df, close_column_name="Adj Close"):
-    
+def plot_data(df, close_column_name="Adj Close"):
+    from copy import deepcopy
+    df = deepcopy(df)
     my_df = {'Date': df.index,
             'Adj Close': df[close_column_name]}
     df = pd.DataFrame(my_df)
@@ -258,7 +280,9 @@ def trade_pure_lstm_predictions(df, close_column_name="Adj Close"):
     plt.xlabel('Date', fontsize=18)
     plt.ylabel('Close Price USD ($)', fontsize=18)
     plt.show()
-    
+
+def trade_pure_lstm_predictions(df, close_column_name="Adj Close"):
+    plot_data(df, close_column_name=close_column_name)
     # Create a new dataframe with only the 'Close column
     data = df.filter([close_column_name])
 
@@ -306,9 +330,20 @@ def trade_pure_lstm_predictions(df, close_column_name="Adj Close"):
 
     # Compile the model
     model.compile(optimizer='adam', loss='mean_squared_error')
-
+    
     # Train the model
-    model.fit(x_train, y_train, batch_size=1, epochs=1)
+    try:
+        load_model('lstm-price-predictor')
+    except Exception as e:
+        history = model.fit(x_train, y_train, batch_size=1, epochs=1)
+    plt.plot(history.history['loss'])
+    plt.title('Model loss')
+    plt.ylabel('Mean Squared Error')
+    plt.xlabel('Epoch')
+    plt.legend('Train', loc='upper left')
+    plt.show()
+    save_model(model, 'lstm-price-predictor')
+
     # Create the testing data set
     # Create a new array containing scaled values from index 1543 to 2002
     test_data = scaled_data[training_data_len - 60:, :]
@@ -327,28 +362,45 @@ def trade_pure_lstm_predictions(df, close_column_name="Adj Close"):
     # Get the models predicted price values
     predictions = model.predict(x_test)
     predictions = scaler.inverse_transform(predictions)
-
+    # Plot error
+    plot_error(y_test, predictions)
     # Get the root mean squared error (RMSE)
     rmse = np.sqrt(np.mean(((predictions - y_test) ** 2)))
+    print("[INFO] Test dataset final RMSE value:{}".format(rmse))
     # Plot the data
     train = data[:training_data_len]
     valid = data[training_data_len:]
     valid['Predictions'] = predictions
     # Visualize the data
-    plt.figure(figsize=(16, 8))
+    my_df = {'Date': train.index,
+            'Adj Close': train[close_column_name]}
+    train = pd.DataFrame(my_df)
+    train["Date"] = pd.to_datetime(train["Date"])
+    train.reset_index(drop=True, inplace=True)
+
+    my_df = {'Date': valid.index, 'Adj Close': valid[close_column_name], 'Predictions':                      valid['Predictions']}
+    valid = pd.DataFrame(my_df)
+    valid["Date"] = pd.to_datetime(valid["Date"])
+    valid.reset_index(drop=True, inplace=True)
+    
+    # Visualize the data
+    plt.figure(figsize=(16,8))
     plt.title('Model')
     plt.xlabel('Date', fontsize=18)
     plt.ylabel('Close Price USD ($)', fontsize=18)
-    train.plot(x="Date", y=close_column_name)
-    valid.plot(x="Date", y=close_column_name)
-    valid.plot(x="Date", y='Predictions')
-    # plt.plot(train[close_column_name])
-    # plt.plot(valid[[close_column_name, 'Predictions']])
+
+    plt.plot(train['Date'], train[close_column_name])
+    plt.plot(valid['Date'], valid[[close_column_name, 'Predictions']])
     plt.legend(['Train', 'Val', 'Predictions'], loc='lower right')
     plt.show()
     max_profit, profitable_trade_count, unprofitable_trade_count, success_rate = calc_max_profit(valid)
     return max_profit, profitable_trade_count, unprofitable_trade_count, success_rate
 
+def plot_error(y_test, predictions, bins=50, kde=True):
+    error = pd.DataFrame(
+        np.mean(np.abs(predictions - y_test), axis=1), columns=['Error'])
+    sns.distplot(error, bins=bins, kde=kde)
+    plt.show()
 
 def calc_max_profit(valid, close_column_name="Adj Close", predictions_column_name="Predictions"):
     '''Calculate max profit given LSTM predictions. 
@@ -391,17 +443,8 @@ def run_pipeline(ticker="GME", start_date="2002-02-13", end_date = "2021-02-12")
     lstm_based_strategy_profit, _, _, _ = trade_pure_lstm_predictions(stock_price)
     print("[INFO] Pure LSTM-based trading profit is ${}".format(lstm_based_strategy_profit))
 
-    # X_train, y_train, X_test, y_test, train, test = plot_and_prepare_data(stock_price)
-
-    # Train model
-    # model = train_model(X_train, y_train)
-
-    # Evaluate model
-    # evaluate_model(model, X_test, y_test)
-
-    # Detect anomaly
-    # consolidation_breakout_profit = detect_anomaly(model, train, test, X_train, X_test, time_steps = 30)
-    # print("[INFO] Consolidation Breakout trading profit is ${}".format(consolidation_breakout_profit))
+    #consolidation_breakout_profit = detect_anomaly(stock_price, time_steps = 30)
+    #print("[INFO] Consolidation Breakout trading profit is ${}".format(consolidation_breakout_profit))
 
 
 if __name__ == "__main__":
@@ -410,12 +453,13 @@ if __name__ == "__main__":
     # [INFO] Buy and Hold profit is $281.1600112915039
     # [INFO] Profitable trade count: 462 Unprofitable trade count: 401 Success Rate: 53.53418308227115%
     # [INFO] Pure LSTM-based trading profit is $110.29022216796918
-    run_pipeline(ticker="SPY", start_date="2002-02-13", end_date = "2021-02-12")
+    # run_pipeline(ticker="SPY", start_date="2002-02-13", end_date = "2021-02-12")
     
     
     # GME start_date=2002-02-13, end_date=2021-0
-    # run_pipeline(ticker="GME", start_date="2010-01-01", end_date = "2020-01-01")
+    # [INFO] Buy and Hold profit is $45.63333559036254
+    # [INFO] Test dataset final RMSE value:13.458590932218822
+    # [INFO] Profitable trade count: 213 Unprofitable trade count: 239 Success Rate: 47.123893805309734%
+    # [INFO] Pure LSTM-based trading profit is $69.04612421989441
+    run_pipeline(ticker="GME", start_date="2002-02-13", end_date = "2021-02-12")
     
-
-
-   
