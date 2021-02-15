@@ -131,7 +131,12 @@ def detect_anomaly(stock_price, time_steps=1, close_column_name="Adj Close"):
                         name='Anomaly'))
     fig.update_layout(showlegend=True)
     fig.show()
-    breakouts = scaler.inverse_transform(anomalies[close_column_name])
+    breakouts = pd.DataFrame(test[time_steps:])
+    test_score_df['loss'] = test_mae_loss
+    breakouts['threshold'] = THRESHOLD
+    breakouts['anomaly'] = test_score_df.loss > test_score_df.threshold
+    breakouts[close_column_name] = scaler.inverse_transform(test[time_steps:][close_column_name])
+    print(breakouts.head())
     max_profit, profitable_trade_count, unprofitable_trade_count, success_rate = calc_max_profit_based_on_breakouts(breakouts, close_column_name)
     return max_profit, profitable_trade_count, unprofitable_trade_count, success_rate
 
@@ -142,18 +147,18 @@ def calc_max_profit_based_on_breakouts(breakouts, close_column_name="Adj Close",
     max_profit = 0
     profitable_trade_count = unprofitable_trade_count = 0
     for i in range(len(breakouts) - 1):
-        if breakouts[close_column_name].iloc[i + 1] > breakouts[close_column_name].iloc[i] and breakouts[predictions_column_name].iloc[i + 1] > breakouts[predictions_column_name].iloc[i]:
-            # LSTM prediction was succesful. Execute trade and collect profits.
-            max_profit += valid[close_column_name].iloc[i + 1] - valid[close_column_name].iloc[i]
+        if breakouts[close_column_name].iloc[i + 1] > breakouts[close_column_name].iloc[i] and breakouts["anomaly"].iloc[i] == True:
+            # LSTM predicted a breakout successfully. Execute trade and collect profits.
+            max_profit += breakouts[close_column_name].iloc[i + 1] - breakouts[close_column_name].iloc[i]
             profitable_trade_count +=1
-        elif breakouts[close_column_name].iloc[i + 1] < breakouts[close_column_name].iloc[i] and breakouts[predictions_column_name].iloc[i + 1] > breakouts[predictions_column_name].iloc[i]:
-            # LSTM prediction was NOT successful. Execute the trade to stop loss.
-            # We have valid[close_column_name].iloc[i + 1] < valid[close_column_name].iloc[i], so here we are adding a negative value to max_profit.
+        elif breakouts[close_column_name].iloc[i + 1] < breakouts[close_column_name].iloc[i] and breakouts["anomaly"].iloc[i] == True:
+            # LSTM prediction of a breakout was NOT successful. Execute the trade to stop loss.
+            # We have breakouts[close_column_name].iloc[i + 1] < breakouts[close_column_name].iloc[i], so here we are adding a negative value to max_profit.
             # This means we are losing money. 
-            max_profit += anomalies[close_column_name].iloc[i + 1] - breakouts[close_column_name].iloc[i]
+            max_profit += breakouts[close_column_name].iloc[i + 1] - breakouts[close_column_name].iloc[i]
             unprofitable_trade_count +=1
-        elif breakouts[predictions_column_name].iloc[i + 1] < breakouts[predictions_column_name].iloc[i]:
-            # LSTM predicts that stock price will drop. We don't enter a trade.
+        elif breakouts["anomaly"].iloc[i] == False:
+            # LSTM predicts no breakout. We don't enter a trade.
             pass
     success_rate = profitable_trade_count / (profitable_trade_count + unprofitable_trade_count) * 100
     print("[INFO] Profitable trade count: {} Unprofitable trade count: {} Success Rate: {}%".format(profitable_trade_count, unprofitable_trade_count, success_rate))
@@ -437,29 +442,29 @@ def run_pipeline(ticker="GME", start_date="2002-02-13", end_date = "2021-02-12")
     print("[INFO] Pipeline started for Ticker:{} Start date:{} End date:{}".format(ticker, start_date, end_date))
 
     stock_price = fetch_data(ticker, start_date, end_date)
-    buy_and_hold_profit = buy_and_hold(stock_price, start_date, end_date)
-    print("[INFO] Buy and Hold profit is ${}".format(buy_and_hold_profit))
+    # buy_and_hold_profit = buy_and_hold(stock_price, start_date, end_date)
+    # print("[INFO] Buy and Hold profit is ${}".format(buy_and_hold_profit))
 
-    lstm_based_strategy_profit, _, _, _ = trade_pure_lstm_predictions(stock_price)
-    print("[INFO] Pure LSTM-based trading profit is ${}".format(lstm_based_strategy_profit))
+    # lstm_based_strategy_profit, _, _, _ = trade_pure_lstm_predictions(stock_price)
+    # print("[INFO] Pure LSTM-based trading profit is ${}".format(lstm_based_strategy_profit))
 
-    #consolidation_breakout_profit = detect_anomaly(stock_price, time_steps = 30)
-    #print("[INFO] Consolidation Breakout trading profit is ${}".format(consolidation_breakout_profit))
+    consolidation_breakout_profit, _, _, _= detect_anomaly(stock_price, time_steps = 30)
+    print("[INFO] Consolidation Breakout trading profit is ${}".format(consolidation_breakout_profit))
 
 
 if __name__ == "__main__":
     # S&P start_date=2002-02-13, end_date=2021-02-12
     # [INFO] Pipeline started for Ticker:SPY Start date:2002-02-13 End date:2021-02-12
     # [INFO] Buy and Hold profit is $281.1600112915039
-    # [INFO] Profitable trade count: 462 Unprofitable trade count: 401 Success Rate: 53.53418308227115%
-    # [INFO] Pure LSTM-based trading profit is $110.29022216796918
-    # run_pipeline(ticker="SPY", start_date="2002-02-13", end_date = "2021-02-12")
+    # [INFO] Pure LSTM-based trading profit is $110.29022216796918 Profitable trade count: 462 Unprofitable trade count: 401 Success Rate: 53.53418308227115
+    # [INFO] Consolidation Breakout trading profit is $4.347592096226596 Profitable trade count: 536 Unprofitable trade count: 395 Success Rate: 57.57250268528465%
+    run_pipeline(ticker="SPY", start_date="2002-02-13", end_date = "2021-02-12")
     
     
-    # GME start_date=2002-02-13, end_date=2021-0
-    # [INFO] Buy and Hold profit is $45.63333559036254
-    # [INFO] Test dataset final RMSE value:13.458590932218822
-    # [INFO] Profitable trade count: 213 Unprofitable trade count: 239 Success Rate: 47.123893805309734%
-    # [INFO] Pure LSTM-based trading profit is $69.04612421989441
-    run_pipeline(ticker="GME", start_date="2002-02-13", end_date = "2021-02-12")
+    # GME start_date=2002-02-13, end_date=2021-02-12
+    # [INFO] Pipeline started for Ticker:GME Start date:2002-02-13 End date:2021-02-12
+    # [INFO] Buy and Hold profit is $45.63333559036254
+    # [INFO] Pure LSTM-based trading profit is $69.04612421989441 Profitable trade count: 213 Unprofitable trade count: 239 Success Rate: 47.123893805309734% Test dataset final RMSE value:13.458590932218822
+    # [INFO] Consolidation Breakout trading profit is $2.1027738249293195 Profitable trade count: 156 Unprofitable trade count: 169 Success Rate: 48.0%
+    # run_pipeline(ticker="GME", start_date="2002-02-13", end_date = "2021-02-12")
     
